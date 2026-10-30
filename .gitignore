@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+build/
+extras/test/froq_test
+*.o

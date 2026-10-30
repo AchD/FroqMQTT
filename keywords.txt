@@ -1,0 +1,19 @@
+#######################################
+# Syntax Coloring Map For Froq
+#######################################
+Froq	KEYWORD1
+begin	KEYWORD2
+end	KEYWORD2
+lastWill	KEYWORD2
+publish	KEYWORD2
+subscribe	KEYWORD2
+loop	KEYWORD2
+state	KEYWORD2
+setKeepAlive	KEYWORD2
+setRetry	KEYWORD2
+setRepublish	KEYWORD2
+setCleanSession	KEYWORD2
+MqTTsessionAlive	LITERAL1
+MqTTsessionRefresh	LITERAL1
+MqTTsessionStartup	LITERAL1
+MqTTsessionAbort	LITERAL1

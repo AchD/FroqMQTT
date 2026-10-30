@@ -1,0 +1,13 @@
+{
+  "name": "FroqMQTT",
+  "version": "2.0.0",
+  "description": "Lightweight MQTT 3.1.1 client that binds bool/float variables directly to MQTT topics. QoS 0/1/2, Last Will, auto-reconnect, fixed RAM footprint.",
+  "keywords": "mqtt, iot, esp8266, esp32, ethernet, wifi, home-automation",
+  "repository": { "type": "git", "url": "https://github.com/AchD/FroqMQTT.git" },
+  "authors": [{ "name": "Achim Diedrichs", "maintainer": true }],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "*",
+  "headers": "Froq.h",
+  "export": { "exclude": ["extras", ".github"] }
+}
