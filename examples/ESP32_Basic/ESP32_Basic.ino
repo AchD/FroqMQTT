@@ -23,6 +23,8 @@ void setup() {
   Serial.begin(115200);
   pinMode(RELAIS_PIN, OUTPUT);
 
+  WiFi.setSleep(false);                 // kein WLAN-Stromsparen -> stabilere Verbindung
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WLAN_SSID, WLAN_PASS);
   while (WiFi.status() != WL_CONNECTED) delay(250);
   Serial.println(WiFi.localIP());
@@ -33,6 +35,7 @@ void setup() {
 
   MqTT.lastWill("esp32/status", "offline", 1);
   MqTT.setRetry(30);
+  MqTT.setConnectionCheck([]() { return WiFi.status() == WL_CONNECTED; });
   MqTT.begin(IPAddress(192, 168, 1, 10), "FroqESP32", "user", "passwort");
 }
 

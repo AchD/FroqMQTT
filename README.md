@@ -34,6 +34,7 @@ void loop() {
 
 - `publish()` sendet automatisch bei Wertänderung, `subscribe()` schreibt direkt in die Variable
 - MQTT 3.1.1, QoS 0 / 1 / 2, Last Will, Keep-Alive, automatische Wiederverbindung
+- erkennt still getrennte Verbindungen (Sendefehler, Ping bei Funkstille, Netzwerk-Prüfung)
 - verarbeitet beliebig viele Telegramme pro TCP-Paket, auch über Paketgrenzen verteilt
 - fester RAM-Bedarf, kein Heap im laufenden Betrieb (ESP8266: ca. 1,6 KB, Uno: ca. 0,45 KB)
 - läuft mit jedem Arduino-`Client`: ESP8266, ESP32, Ethernet-Shield, WiFiNINA, `WiFiClientSecure` (TLS)
@@ -65,6 +66,7 @@ Beispiele: [ESP8266](examples/ESP8266_Basic/ESP8266_Basic.ino) ·
 | `publish(topic, &var [, qos [, nachkommastellen]])` | float senden |
 | `subscribe(topic, &var [, qos] [, "EIN", "AUS"])` | bool/float empfangen |
 | `lastWill(topic, msg [, qos])` | Last Will |
+| `setConnectionCheck(fn)` | Netzwerk weg → sofort neu verbinden |
 | `loop()` | zyklisch aufrufen |
 | `state(MqTTsessionAlive / …Startup / …Refresh / …Abort)` | Status |
 

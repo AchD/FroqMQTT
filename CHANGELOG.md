@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.0.1 – 2026-11-17
+
+Stabilere Verbindung bei längeren Pausen ohne Datenverkehr
+(Router/WLAN trennen ruhige TCP-Verbindungen oft still).
+
+### Verbessert
+- Schlägt das Senden fehl (`write()`), wird sofort neu verbunden statt erst nach dem Ping-Timeout.
+- Ping wird jetzt auch gesendet, wenn längere Zeit nichts **empfangen** wurde. Wer regelmäßig mit
+  QoS 0 sendet, bemerkt eine tote Verbindung damit ebenfalls.
+- Keine Antwort auf den Ping: Abbruch nach `FROQ_PING_TIMEOUT` (10 s) statt nach der vollen
+  Keep-Alive-Zeit.
+- Neu: `setConnectionCheck()` – meldet das Netzwerk (z. B. WLAN) „weg“, wird die MQTT-Verbindung sofort
+  als getrennt markiert; ist es wieder da, wird sofort neu verbunden. Ohne Netzwerk kein blockierender
+  Verbindungsversuch mehr.
+- Beim Abbruch unbestätigte QoS-1/2-Telegramme werden nach der Neuverbindung mit gleicher Packet-ID und
+  DUP-Flag sofort wiederholt (bei `cleanSession = false`).
+- Standard für `FROQ_DEFAULT_RETRY` von 300 s auf 30 s gesenkt.
+
+### Behoben
+- Zeitstempel innerhalb von `loop()`: Wurde im selben Durchlauf gesendet oder empfangen, konnte die
+  Zeitdifferenz überlaufen. Folge waren doppelte Subscribes direkt nach dem Verbinden, unnötige Pings und
+  zu frühe Wiederholungen. Der Host-Test läuft jetzt zusätzlich mit einer weiterlaufenden Uhr.
+- Beispiele: WLAN-Stromsparmodus aus, `setConnectionCheck()` gesetzt.
+
 ## 2.0.0 – 2026-10-30
 
 Komplette Überarbeitung des Empfangs- und Sendeteils. Die öffentliche API ist kompatibel zu 1.3.

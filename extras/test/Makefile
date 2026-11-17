@@ -7,3 +7,5 @@ test:
 	  echo "== FROQ_RX_BUFFER=$$rx"; \
 	  $(CXX) $(FLAGS) -DFROQ_RX_BUFFER=$$rx ../../src/Froq.cpp test.cpp -o froq_test && ./froq_test || exit 1; \
 	done
+	@echo "== Uhr laeuft bei jedem millis()-Aufruf weiter (wie echte Hardware)"
+	@$(CXX) $(FLAGS) -DAUTO_TICK ../../src/Froq.cpp test.cpp -o froq_test && ./froq_test || exit 1

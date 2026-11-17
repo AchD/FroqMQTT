@@ -32,6 +32,9 @@ void setup() {
   MqTT.publish("keller/temperatur", &temperatur, 0, 1);
   MqTT.subscribe("keller/lampe", &lampe);
   MqTT.setRetry(30);
+  // Kabel gezogen -> sofort getrennt, Kabel wieder da -> sofort neu verbinden
+  // (W5100 meldet LinkON/LinkOFF nicht, dann bleibt es beim normalen Ablauf)
+  MqTT.setConnectionCheck([]() { return Ethernet.linkStatus() != LinkOFF; });
   MqTT.begin(IPAddress(192, 168, 1, 10), "FroqUno");
 }
 

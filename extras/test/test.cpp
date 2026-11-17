@@ -6,6 +6,7 @@
 #include <iostream>
 
 uint32_t g_millis = 0;
+static bool g_linkUp = true;
 SerialStub Serial;
 
 typedef std::vector<uint8_t> Bytes;
@@ -17,10 +18,15 @@ public:
     std::deque<Bytes> segments;   // jedes Element = ein TCP-Segment
     Bytes out;
     bool isConnected = false;
-    int writeCalls = 0;
-    int connect(IPAddress, uint16_t) override { isConnected = true; return 1; }
-    int connect(const char*, uint16_t) override { isConnected = true; return 1; }
-    size_t write(const uint8_t *b, size_t n) override { writeCalls++; out.insert(out.end(), b, b + n); return n; }
+    bool failWrite = false;
+    int writeCalls = 0, connectCalls = 0;
+    int connect(IPAddress, uint16_t) override { connectCalls++; isConnected = true; return 1; }
+    int connect(const char*, uint16_t) override { connectCalls++; isConnected = true; return 1; }
+    size_t write(const uint8_t *b, size_t n) override {
+        writeCalls++;
+        if (failWrite || !isConnected) return 0;
+        out.insert(out.end(), b, b + n); return n;
+    }
     int available() override { return segments.empty() ? 0 : (int)segments.front().size(); }
     int read(uint8_t *b, size_t n) override {
         if (segments.empty()) return -1;
@@ -69,6 +75,18 @@ static std::string payloadOf(const Pkt &p) {
     return std::string(p.body.begin() + i, p.body.end());
 }
 static Bytes cat(std::initializer_list<Bytes> l) { Bytes r; for (auto &b : l) r.insert(r.end(), b.begin(), b.end()); return r; }
+
+static void ackAll(MockClient &net, const std::vector<Pkt> &pk) {   // Broker bestaetigt alles
+    for (auto &p : pk) {
+        if (p.hdr == 0x82) net.segments.push_back(Bytes{0x90, 0x03, p.body[0], p.body[1], 0x01});
+        if ((p.hdr & 0xF0) == 0x30 && ((p.hdr >> 1) & 3)) {
+            uint16_t l = (p.body[0] << 8) | p.body[1];
+            uint16_t id = (p.body[2 + l] << 8) | p.body[3 + l];
+            if (((p.hdr >> 1) & 3) == 1) net.segments.push_back(ack(0x40, id));
+            else net.segments.push_back(cat({ack(0x50, id), ack(0x70, id)}));
+        }
+    }
+}
 
 #define CHECK(c) do { if (!(c)) { std::cerr << "FEHLER Zeile " << __LINE__ << ": " #c "\n"; return 1; } } while (0)
 
@@ -210,6 +228,87 @@ int main() {
     pk = net.takePackets();
     CHECK(pk.size() == 1 && pk[0].hdr == 0x10);
     std::cout << "OK  Wiederverbindung nach Abbruch\n";
+
+    // CONNACK fuer die Wiederverbindung
+    net.segments.push_back({0x20, 0x02, 0x00, 0x00});
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAlive));
+    ackAll(net, net.takePackets());
+    mq.loop(); net.takePackets();
+    CHECK(!mq.state(MqTTsessionStartup));
+
+    // ===== 2.0.1: Senden schlaegt fehl -> sofortiger Abbruch, danach DUP-Wiederholung =====
+    licht = !licht;
+    g_millis += 3001;
+    net.failWrite = true;
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAbort));
+    net.failWrite = false;
+    g_millis += FROQ_DEFAULT_RETRY * 1000 + 1;
+    mq.loop();
+    pk = net.takePackets();
+    CHECK(pk.size() == 1 && pk[0].hdr == 0x10);
+    net.segments.push_back({0x20, 0x02, 0x00, 0x00});
+    mq.loop();
+    pk = net.takePackets();
+    bool dupLicht = false;
+    for (auto &p : pk)
+        if ((p.hdr & 0xF0) == 0x30 && topicOf(p) == "test/licht/oben" && (p.hdr & 0x08)
+            && payloadOf(p) == (licht ? "EIN" : "AUS")) dupLicht = true;
+    CHECK(dupLicht);
+    ackAll(net, pk);
+    mq.loop(); net.takePackets();
+    std::cout << "OK  Sendefehler -> sofort neu verbinden, offenes QoS-Telegramm mit DUP wiederholt\n";
+
+    // ===== 2.0.1: Keine PINGRESP -> Abbruch nach FROQ_PING_TIMEOUT =====
+    g_millis += FROQ_DEFAULT_KEEPALIVE * 1000;
+    mq.loop();
+    CHECK(mq.state(MqTTsessionRefresh));
+    g_millis += FROQ_PING_TIMEOUT * 1000 + 1;
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAbort));
+    std::cout << "OK  Keine Ping-Antwort -> Abbruch nach " << FROQ_PING_TIMEOUT << " s\n";
+
+    // ===== 2.0.1: Netzwerk-Pruefung =====
+    mq.setConnectionCheck([]() { return g_linkUp; });
+    g_linkUp = false;
+    int cc = net.connectCalls;
+    g_millis += FROQ_DEFAULT_RETRY * 1000 * 3;
+    mq.loop(); mq.loop();
+    CHECK(net.connectCalls == cc);              // kein blockierender connect() ohne Netz
+    CHECK(mq.state(MqTTsessionAbort));
+    g_millis += 1000;
+    g_linkUp = true;
+    mq.loop();
+    CHECK(net.connectCalls == cc + 1);          // Netz zurueck -> sofort verbinden
+    net.segments.push_back({0x20, 0x02, 0x00, 0x00});
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAlive));
+    ackAll(net, net.takePackets());
+    mq.loop(); net.takePackets();
+    g_linkUp = false;
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAbort));          // Netz weg -> sofort Abbruch
+    g_linkUp = true;
+    mq.loop();
+    net.segments.push_back({0x20, 0x02, 0x00, 0x00});
+    mq.loop();
+    CHECK(mq.state(MqTTsessionAlive));
+    ackAll(net, net.takePackets());
+    mq.loop(); net.takePackets();
+    std::cout << "OK  Netzwerk weg/zurueck -> sofortiger Abbruch / sofortige Neuverbindung\n";
+
+    // ===== 2.0.1: Regelmaessig QoS0 senden, Broker antwortet nie -> trotzdem Ping =====
+    static float q0 = 0;
+    CHECK(mq.publish("test/q0", &q0, 0));
+    bool pinged = false;
+    for (int i = 0; i < 6 && !pinged; i++) {
+        q0 += 1; g_millis += 20000;
+        mq.loop();
+        for (auto &p : net.takePackets()) if (p.hdr == 0xC0) pinged = true;
+    }
+    CHECK(pinged);
+    std::cout << "OK  Ping auch bei laufendem QoS-0-Senden ohne Empfang\n";
 
     std::cout << "sizeof(Froq) Host-64bit: " << sizeof(Froq) << " Byte\n";
     std::cout << "ALLE TESTS BESTANDEN\n";
