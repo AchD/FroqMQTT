@@ -139,10 +139,37 @@ MqTT.begin("broker.local", "ClientID", "user", "passwort");
 - Die **Client-ID** muss auf dem Broker eindeutig sein. Zwei Geräte mit derselben ID werfen
   sich gegenseitig vom Broker.
 - Bricht die Verbindung ab (WLAN weg, Broker neu gestartet), verbindet Froq sich automatisch
-  neu. Die Wartezeit stellst du mit `setRetry()` ein (Standard 300 s).
+  neu. Die Wartezeit stellst du mit `setRetry()` ein (Standard 30 s).
 - Nach jeder (Wieder-)Verbindung werden alle Subscribes neu angemeldet und alle
   Publish-Variablen einmal mit ihrem aktuellen Wert gesendet.
 - `MqTT.end()` trennt die Verbindung sauber; danach wird nicht automatisch neu verbunden.
+
+### Verbindungsabbrüche schnell erkennen
+
+Router, Access-Points und Firewalls trennen TCP-Verbindungen, über die längere Zeit nichts läuft,
+oft **still**: Der Mikrocontroller merkt davon nichts, und ein Telegramm mit QoS 0 geht ins Leere.
+Froq erkennt das auf mehreren Wegen:
+
+- Schlägt das Senden fehl, wird sofort neu verbunden.
+- Läuft längere Zeit (90 % der Keep-Alive-Zeit) nichts in eine der beiden Richtungen, sendet Froq
+  einen Ping. Kommt nach `FROQ_PING_TIMEOUT` (10 s) keine Antwort, wird neu verbunden.
+- Unbestätigte QoS-1/2-Telegramme werden nach der Neuverbindung wiederholt, und alle
+  Publish-Variablen senden ihren aktuellen Wert.
+
+Zusätzlich empfohlen:
+
+```cpp
+// Netzwerk weg -> MQTT sofort getrennt, Netzwerk zurück -> sofort neu verbinden
+MqTT.setConnectionCheck([]() { return WiFi.status() == WL_CONNECTED; });
+
+WiFi.setSleepMode(WIFI_NONE_SLEEP);   // ESP8266: WLAN-Stromsparen aus
+WiFi.setSleep(false);                 // ESP32:   WLAN-Stromsparen aus
+
+MqTT.setKeepAlive(30);                // tote Verbindung früher bemerken
+MqTT.publish("haus/licht", &licht, 1);   // QoS 1 für Werte, die nicht verloren gehen dürfen
+```
+
+Mit Ethernet-Shield (W5500/W5200): `MqTT.setConnectionCheck([]() { return Ethernet.linkStatus() != LinkOFF; });`
 
 ### Verschlüsselte Verbindung (TLS)
 
@@ -290,6 +317,7 @@ MqTT.setKeepAlive(60);      // Sekunden, 0 = aus. Ohne Datenverkehr wird nach 90
 MqTT.setRetry(30);          // Sekunden bis zur Neuverbindung nach Abbruch
 MqTT.setRepublish(30);      // Sekunden bis zur Wiederholung unbestätigter QoS-1/2-Telegramme
 MqTT.setCleanSession(true); // true = Broker vergisst Subscribes beim Trennen
+MqTT.setConnectionCheck(fn); // optional: bool fn() meldet, ob das Netzwerk verbunden ist
 ```
 
 ### Beim Kompilieren (`src/configFroq.h`)
@@ -301,7 +329,8 @@ MqTT.setCleanSession(true); // true = Broker vergisst Subscribes beim Trennen
 | `FROQ_TX_BUFFER` | 64 | 64 | Sendepuffer; Telegramme dürfen trotzdem größer sein |
 | `FROQ_PAYLOAD_MAX` | 24 | 24 | max. ausgewertete Zeichen eines float-Wertes |
 | `FROQ_DEFAULT_KEEPALIVE` | 60 | 60 | Keep-Alive in s |
-| `FROQ_DEFAULT_RETRY` | 300 | 300 | Neuverbindung in s |
+| `FROQ_DEFAULT_RETRY` | 30 | 30 | Neuverbindung in s |
+| `FROQ_PING_TIMEOUT` | 10 | 10 | max. Wartezeit auf Ping-Antwort in s |
 | `FROQ_DEFAULT_STARTUP` | 60 | 60 | max. Wartezeit auf Antwort des Brokers beim Verbinden in s |
 | `FROQ_DEFAULT_REPUBLISH` | 30 | 30 | Wiederholung QoS > 0 in s |
 | `FROQ_DEFAULT_PORT` | 1883 | 1883 | Standard-Port |
@@ -383,6 +412,7 @@ mosquitto_pub -h 192.168.1.10 -u user -P passwort -t haus/sollwert -m 21.5
 | float wird ständig gesendet | Wert schwankt – runden oder `FROQ_MIN_MILLIS_PUBLISH` erhöhen. |
 | `publish()`/`subscribe()` liefert `false` | `FROQ_MAX_ITEMS` zu klein. |
 | Lange Topics/Werte kommen nicht an | Telegramm größer als `FROQ_RX_BUFFER` – Puffer vergrößern. |
+| Werte gehen nach längerer Pause verloren | Router/WLAN hat die Verbindung still getrennt. QoS 1 verwenden, `setConnectionCheck()` setzen, WLAN-Stromsparen aus, ggf. `setKeepAlive(30)` – siehe [Verbindungsabbrüche schnell erkennen](#verbindungsabbrüche-schnell-erkennen). |
 | Werte kommen verzögert an | `loop()` blockiert (lange `delay()`), `MqTT.loop()` wird zu selten aufgerufen. |
 | Absturz nach `subscribe()` mit `String` | Topic muss dauerhaft gültig sein, siehe [Grenzen](#12-grenzen). |
 
@@ -403,4 +433,5 @@ mosquitto_pub -h 192.168.1.10 -u user -P passwort -t haus/sollwert -m 21.5
 | `lastWill(topic, nachricht [, qos])` | Last Will (vor `begin()`) |
 | `state(MqTTsession…)` | Status abfragen |
 | `setKeepAlive(s)`, `setRetry(s)`, `setRepublish(s)`, `setCleanSession(b)` | Laufzeit-Einstellungen |
+| `setConnectionCheck(fn)` | Netzwerk-Prüfung für schnelle Neuverbindung |
 | `sessionAlive` | `true` = verbunden |

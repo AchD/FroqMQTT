@@ -1,6 +1,6 @@
 /*
   FroqMQTT - schlanke MQTT 3.1.1 Client-Library fuer Arduino (ESP8266, ESP32, AVR + Ethernet ...)
-  Version 2.0.0  -  https://github.com/AchD/FroqMQTT
+  Version 2.0.1  -  https://github.com/AchD/FroqMQTT
   Copyright (c) 2026 Achim Diedrichs - MIT License (siehe LICENSE)
 
   Arduino-Variablen (bool / float) werden mit MQTT-Topics verknuepft:
@@ -86,6 +86,12 @@ public:
     void setRepublish(uint16_t s) { _republish = s; }
     void setCleanSession(bool c)  { _cleanSession = c; }
 
+    /* Optional: Funktion, die meldet, ob das Netzwerk verbunden ist.
+       Ist es weg, wird die MQTT-Verbindung sofort als abgebrochen markiert,
+       und sobald es wieder da ist, sofort neu verbunden.
+         MqTT.setConnectionCheck([]() { return WiFi.status() == WL_CONNECTED; });   */
+    void setConnectionCheck(bool (*check)()) { _linkCheck = check; }
+
     bool sessionAlive = false;   // kompatibel zu V1.x
 
 private:
@@ -137,6 +143,9 @@ private:
     uint32_t _stateMillis = 0;   // Zeitpunkt des letzten Zustandswechsels
     uint32_t _lastTx = 0;        // letztes gesendetes Paket (Keep-Alive)
     uint32_t _pingMillis = 0;
+    uint32_t _lastRx = 0;        // letztes empfangenes Paket
+    bool   (*_linkCheck)() = nullptr;
+    bool     _linkDown = false;
 
     // Empfang: alle Pakete im Puffer werden nacheinander verarbeitet
     uint8_t  _rx[FROQ_RX_BUFFER];

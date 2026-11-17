@@ -25,6 +25,8 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);   // kein WLAN-Stromsparen -> stabilere Verbindung
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WLAN_SSID, WLAN_PASS);
   Serial.print("WLAN verbinden");
   while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print('.'); }
@@ -39,6 +41,8 @@ void setup() {
 
   MqTT.lastWill("test/status", "offline");
   MqTT.setRetry(30);                                     // nach Abbruch alle 30 s neu verbinden
+  // WLAN weg -> MQTT sofort als getrennt markieren, WLAN wieder da -> sofort neu verbinden
+  MqTT.setConnectionCheck([]() { return WiFi.status() == WL_CONNECTED; });
   MqTT.begin("test.mosquitto.org", "FroqESP8266");
   // oder mit IP und Login:
   // MqTT.begin(IPAddress(192, 168, 1, 10), "FroqESP8266", "user", "passwort");

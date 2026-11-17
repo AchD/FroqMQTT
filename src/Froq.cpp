@@ -75,8 +75,15 @@ void Froq::lastWill(String topic, String message) { lastWill(topic, message, FRO
 
 void Froq::connect()
 {
-    _rxLen = 0; _rxSkip = 0; _pingOut = false;
+    _rxLen = 0; _rxSkip = 0; _txLen = 0; _pingOut = false;
     _stateMillis = millis();
+    if (_linkCheck && !_linkCheck()) {               // Netzwerk (z.B. WLAN) nicht verbunden
+        FROQ_DBGLN(F("Froq: Netzwerk nicht verbunden"));
+        _state = S_ABORT;
+        _linkDown = true;
+        sessionAlive = false;
+        return;
+    }
     int ok = _url ? _client->connect(_url, _port) : _client->connect(_ip, _port);
     if (!ok) {
         FROQ_DBGLN(F("Froq: TCP-Verbindung fehlgeschlagen"));
@@ -98,6 +105,8 @@ void Froq::connect()
     if (_user.length()) rem += 2 + _user.length();
     if (_pass.length()) rem += 2 + _pass.length();
 
+    _state = S_CONNECTING;      // vor dem Senden: txFlush() kann abort() ausloesen
+    _lastRx = _stateMillis;
     txHeader(MQ_CONNECT, rem);
     txUTF8("MQTT", 4);
     txByte(4);                  // Protokoll-Level 3.1.1
@@ -111,7 +120,6 @@ void Froq::connect()
     if (_user.length()) txUTF8(_user.c_str(), _user.length());
     if (_pass.length()) txUTF8(_pass.c_str(), _pass.length());
     txFlush();
-    _state = S_CONNECTING;
 }
 
 void Froq::abort()
@@ -122,7 +130,7 @@ void Froq::abort()
     _stateMillis = millis();
     sessionAlive = false;
     _pingOut = false;
-    _rxLen = 0; _rxSkip = 0;
+    _rxLen = 0; _rxSkip = 0; _txLen = 0;
 }
 
 void Froq::onConnected()
@@ -130,13 +138,19 @@ void Froq::onConnected()
     _state = S_ALIVE;
     _stateMillis = millis();
     sessionAlive = true;
-    for (uint8_t i = 0; i < _itemCount; i++) {
+    _lastRx = _stateMillis;
+    for (uint8_t i = 0; i < _itemCount && _state == S_ALIVE; i++) {
         Item &it = _items[i];
-        it.flags &= ~(F_PENDING | F_REL);
         if (it.flags & F_SUB) {
-            it.flags &= ~F_SYNC;   // muss neu abonniert werden
+            it.flags &= ~(F_PENDING | F_SYNC);   // muss neu abonniert werden
             sendSubscribe(it);
+        } else if ((it.flags & F_PENDING) && !_cleanSession) {
+            // Vor dem Abbruch unbestaetigtes QoS-1/2-Telegramm: mit gleicher
+            // Packet-ID und DUP sofort wiederholen (MQTT 3.1.1, Kap. 4.4)
+            if (it.flags & F_REL) { sendAck(MQ_PUBREL, it.packetId); it.millis = millis(); }
+            else                  sendPublish(it, true);
         } else {
+            it.flags &= ~(F_PENDING | F_REL);
             it.flags |= F_SYNC;    // aktuellen Wert einmal senden
         }
     }
@@ -147,7 +161,11 @@ void Froq::onConnected()
 // =====================================================================
 void Froq::loop()
 {
-    const uint32_t now = millis();
+    if (_linkCheck && (_state == S_CONNECTING || _state == S_ALIVE) && !_linkCheck()) {
+        FROQ_DBGLN(F("Froq: Netzwerk weg"));
+        abort();
+        _linkDown = true;
+    }
 
     if (_state == S_CONNECTING || _state == S_ALIVE) {
         receive();                                   // ALLE vorhandenen Pakete verarbeiten
@@ -156,6 +174,10 @@ void Froq::loop()
         }
     }
 
+    // Zeit erst NACH dem Empfang lesen: dort gesetzte Zeitstempel duerfen nicht
+    // in der "Zukunft" liegen, sonst laeuft (now - stempel) ueber.
+    uint32_t now = millis();
+
     switch (_state) {
     case S_CONNECTING:
         if (now - _stateMillis > (uint32_t)FROQ_DEFAULT_STARTUP * 1000UL) abort();
@@ -163,11 +185,17 @@ void Froq::loop()
 
     case S_ALIVE:
         processItems(now);
-        if (_keepAlive) {
+        if (_keepAlive && _state == S_ALIVE) {
+            now = millis();                                        // processItems() kann gesendet haben
             const uint32_t ka = (uint32_t)_keepAlive * 1000UL;
+            uint32_t pto = (uint32_t)FROQ_PING_TIMEOUT * 1000UL;
+            if (pto > ka) pto = ka;
             if (_pingOut) {
-                if (now - _pingMillis > ka) abort();               // keine PINGRESP
-            } else if (now - _lastTx > ka - ka / 10) {             // 90 % der Keep-Alive-Zeit
+                if (now - _pingMillis > pto) abort();              // keine PINGRESP -> Verbindung tot
+            } else if (now - _lastTx > ka - ka / 10 ||             // 90 % Keep-Alive ohne Senden
+                       now - _lastRx > ka - ka / 10) {             // ... oder ohne Empfang
+                // Auch wer regelmaessig mit QoS 0 sendet, bekommt so eine tote
+                // Verbindung (z.B. vom Router still getrennt) mit.
                 sendSimple(MQ_PINGREQ);
                 _pingOut = true;
                 _pingMillis = now;
@@ -176,7 +204,11 @@ void Froq::loop()
         break;
 
     case S_ABORT:
-        if (now - _stateMillis > (uint32_t)_retryTime * 1000UL) connect();
+        if (_linkCheck && !_linkCheck()) { _linkDown = true; break; }   // warten aufs Netzwerk
+        if (_linkDown || now - _stateMillis > (uint32_t)_retryTime * 1000UL) {
+            _linkDown = false;                     // Netzwerk wieder da -> sofort verbinden
+            connect();
+        }
         break;
 
     default:
@@ -317,6 +349,7 @@ void Froq::parse()
 void Froq::handlePacket(uint8_t header, const uint8_t *p, uint16_t len)
 {
     const uint16_t pid = len >= 2 ? (uint16_t)((p[0] << 8) | p[1]) : 0;
+    _lastRx = millis();
     FROQ_DBG(F("Froq <- 0x")); FROQ_DBG(header, HEX); FROQ_DBG(F(" len ")); FROQ_DBGLN(len);
 
     switch (header & 0xF0) {
@@ -439,9 +472,15 @@ void Froq::txHeader(uint8_t header, uint32_t remaining)
 }
 void Froq::txFlush()
 {
+    if (_state == S_ABORT || _state == S_IDLE) { _txLen = 0; return; }   // Verbindung schon weg
     if (_txLen) {
-        _client->write(_tx, _txLen);   // ein Aufruf statt Byte fuer Byte
+        const size_t n = _txLen;
         _txLen = 0;
+        if (_client->write(_tx, n) != n) {   // ein Aufruf statt Byte fuer Byte
+            FROQ_DBGLN(F("Froq: Senden fehlgeschlagen"));
+            abort();                          // sofort neu verbinden statt auf Ping-Timeout warten
+            return;
+        }
     }
     _lastTx = millis();
 }

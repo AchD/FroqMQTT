@@ -39,13 +39,16 @@
 #define FROQ_DEFAULT_KEEPALIVE 60        // Keep-Alive in Sekunden
 #endif
 #ifndef FROQ_DEFAULT_RETRY
-#define FROQ_DEFAULT_RETRY 300           // Wiederverbindung nach Abbruch in Sekunden
+#define FROQ_DEFAULT_RETRY 30            // Wiederverbindung nach Abbruch in Sekunden
 #endif
 #ifndef FROQ_DEFAULT_STARTUP
 #define FROQ_DEFAULT_STARTUP 60          // max. Wartezeit auf CONNACK in Sekunden
 #endif
 #ifndef FROQ_DEFAULT_REPUBLISH
 #define FROQ_DEFAULT_REPUBLISH 30        // erneutes Senden QoS>0 ohne Antwort in Sekunden
+#endif
+#ifndef FROQ_PING_TIMEOUT
+#define FROQ_PING_TIMEOUT 10             // max. Wartezeit auf PINGRESP in Sekunden
 #endif
 #ifndef FROQ_DEFAULT_PORT
 #define FROQ_DEFAULT_PORT 1883
